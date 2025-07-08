@@ -135,7 +135,9 @@ const Register = () => {
           firstName: values.firstName.trim(),
           lastName: values.lastName.trim(),
           telephone: values.telephone.trim(),
-          password: values.password
+          password: values.password,
+          deviceUuid: 'a1b2c3d4-e5f6-7890-abcd-1234567890ef', // örnek uuid, gerçek uuid ile değiştirilebilir
+          fcmToken: 'fcm_örnek_token_bilgisi' // örnek token, gerçek fcm token ile değiştirilebilir
         };
 
         // Form verilerini kontrol et
@@ -171,6 +173,15 @@ const Register = () => {
               autoClose: 5000
             });
           } else {
+            // Backend duplicate key hatası için özel mesaj
+            if (response?.message && (response.message.includes('already exists') || response.message.includes('duplicate'))) {
+              setError('Bu numarayla daha önce kaydoldu');
+              toast.error('Bu numarayla daha önce kaydoldu', {
+                position: "top-center",
+                autoClose: 5000
+              });
+              return;
+            }
             throw new Error(response?.message || 'Kayıt işlemi başarısız oldu');
           }
         } else {
@@ -182,7 +193,7 @@ const Register = () => {
             return;
           }
 
-          const verifyResponse = await AuthService.verifyPhone(verificationCode, formData.telephone);
+          const verifyResponse = await AuthService.verifyPhone(verificationCode);
 
           if (verifyResponse && verifyResponse.success) {
             setError('');
@@ -214,12 +225,21 @@ const Register = () => {
           }
         });
 
-        const errorMessage = err.message || 'Bir hata oluştu. Lütfen daha sonra tekrar deneyin.';
-        setError(errorMessage);
-        toast.error(errorMessage, {
-          position: "top-center",
-          autoClose: 5000
-        });
+        // Backend duplicate key hatası için özel mesaj
+        if (err.message && (err.message.includes('already exists') || err.message.includes('duplicate'))) {
+          setError('Bu numarayla daha önce kaydoldu');
+          toast.error('Bu numarayla daha önce kaydoldu', {
+            position: "top-center",
+            autoClose: 5000
+          });
+        } else {
+          const errorMessage = err.message || 'Bir hata oluştu. Lütfen daha sonra tekrar deneyin.';
+          setError(errorMessage);
+          toast.error(errorMessage, {
+            position: "top-center",
+            autoClose: 5000
+          });
+        }
       } finally {
         setIsSubmitting(false);
       }

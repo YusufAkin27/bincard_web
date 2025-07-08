@@ -22,6 +22,14 @@ const ForgotPassword = () => {
   const navigate = useNavigate();
   const [error, setError] = useState('');
 
+  // Hata mesajı 5 saniye sonra otomatik kaybolsun
+  React.useEffect(() => {
+    if (error) {
+      const timer = setTimeout(() => setError(''), 10000);
+      return () => clearTimeout(timer);
+    }
+  }, [error]);
+
   const formik = useFormik({
     initialValues: {
       telephone: '',

@@ -19,6 +19,12 @@ import AuthService from '../../services/auth.service';
 import { ToastContainer, toast } from 'react-toastify';
 import 'react-toastify/dist/ReactToastify.css';
 
+// Cihaz bilgisi ve ip adresi için yardımcı fonksiyonlar (örnek, gerçek uygulamada farklı alınabilir)
+const getDeviceInfo = () => 'Xiaomi Redmi Note 11 - Android 13';
+const getAppVersion = () => '1.4.2';
+const getPlatform = () => 'ANDROID';
+const getIpAddress = () => '192.168.1.45'; // Gerçek ip almak için ek servis gerekir
+
 const Login = () => {
   const navigate = useNavigate();
   const location = useLocation();
@@ -26,6 +32,9 @@ const Login = () => {
   const [successMessage, setSuccessMessage] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [showVerify, setShowVerify] = useState(false);
+  const [pendingLogin, setPendingLogin] = useState(null);
+  const [verifyCode, setVerifyCode] = useState('');
 
   useEffect(() => {
     if (location.state?.message) {
@@ -66,13 +75,25 @@ const Login = () => {
       try {
         // Telefon numarasının formatını kontrol et
         let telephone = values.telephone;
-        if (!telephone.startsWith('0')) {
-          telephone = '0' + telephone;
+        if (!telephone.startsWith('+90')) {
+          telephone = '+90' + telephone.replace(/^0/, '');
         }
 
         console.log('Giriş denemesi:', { telephone });
         const response = await AuthService.login(telephone, values.password);
         
+        // Yeni cihaz algılandıysa doğrulama ekranına geç
+        if (response && response.newDevice) {
+          setShowVerify(true);
+          setPendingLogin({ telephone });
+          toast.info('Yeni cihaz algılandı. Giriş için doğrulama kodu gönderildi.', {
+            position: "top-center",
+            autoClose: 5000
+          });
+          setIsSubmitting(false);
+          return;
+        }
+
         if (response && response.success) {
           toast.success('Giriş başarılı! Yönlendiriliyorsunuz...', {
             position: "top-center",
@@ -99,7 +120,7 @@ const Login = () => {
         } else if (err.response?.status === 500) {
           errorMessage = 'Sunucu hatası oluştu. Lütfen daha sonra tekrar deneyin.';
         } else if (err.response?.status === 401) {
-          errorMessage = 'Telefon numarası veya şifre hatalı.';
+          errorMessage = 'Girilen şifre ile telefon numarası eşleşmiyor';
         } else if (err.message) {
           errorMessage = err.message;
         } else {
@@ -116,6 +137,50 @@ const Login = () => {
       }
     },
   });
+
+  // Yeni cihaz doğrulama kodu gönderme işlemi
+  const handleVerifySubmit = async (e) => {
+    e.preventDefault();
+    setIsSubmitting(true);
+    setError('');
+    try {
+      const verifyResponse = await AuthService.phoneVerify({
+        code: verifyCode,
+        ipAddress: getIpAddress(),
+        deviceInfo: getDeviceInfo(),
+        appVersion: getAppVersion(),
+        platform: getPlatform(),
+      });
+      if (verifyResponse && verifyResponse.success) {
+        toast.success('Doğrulama başarılı! Yönlendiriliyorsunuz...', {
+          position: "top-center",
+          autoClose: 2000,
+          onClose: () => {
+            navigate('/dashboard');
+          }
+        });
+      } else {
+        // Eğer mesaj "Doğrulama kodu geçersiz." ise özel uyarı göster
+        if (verifyResponse?.message && verifyResponse.message.includes('Doğrulama kodu geçersiz')) {
+          setError('Girilen sms doğrulama kodu yanlış');
+          toast.error('Girilen sms doğrulama kodu yanlış', {
+            position: "top-center",
+            autoClose: 5000
+          });
+          return;
+        }
+        throw new Error(verifyResponse?.message || 'Doğrulama başarısız oldu.');
+      }
+    } catch (err) {
+      setError(err.message || 'Doğrulama başarısız oldu.');
+      toast.error(err.message || 'Doğrulama başarısız oldu.', {
+        position: "top-center",
+        autoClose: 5000
+      });
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
 
   const handleClickShowPassword = () => {
     setShowPassword(!showPassword);
@@ -170,115 +235,151 @@ const Login = () => {
             </Alert>
           )}
 
-          <form onSubmit={formik.handleSubmit}>
-            <TextField
-              fullWidth
-              margin="normal"
-              id="telephone"
-              name="telephone"
-              label="Telefon Numarası"
-              value={formik.values.telephone}
-              onChange={formik.handleChange}
-              error={formik.touched.telephone && Boolean(formik.errors.telephone)}
-              helperText={formik.touched.telephone && formik.errors.telephone}
-              InputProps={{
-                startAdornment: (
-                  <InputAdornment position="start">
-                    <Phone color="primary" />
-                  </InputAdornment>
-                ),
-              }}
-              sx={{ mb: 2 }}
-            />
+          {showVerify ? (
+            <form onSubmit={handleVerifySubmit}>
+              <Typography variant="h5" sx={{ mb: 2, color: '#1976d2', fontWeight: 700 }}>
+                Cihaz Doğrulama
+              </Typography>
+              <Typography variant="body1" sx={{ mb: 2 }}>
+                Yeni cihaz algılandı. Lütfen SMS ile gelen doğrulama kodunu girin.
+              </Typography>
+              <TextField
+                fullWidth
+                margin="normal"
+                id="verifyCode"
+                name="verifyCode"
+                label="Doğrulama Kodu"
+                value={verifyCode}
+                onChange={e => setVerifyCode(e.target.value)}
+                sx={{ mb: 3 }}
+              />
+              <Button
+                type="submit"
+                fullWidth
+                variant="contained"
+                size="large"
+                disabled={isSubmitting}
+                sx={{ mb: 3, height: 48 }}
+              >
+                {isSubmitting ? 'Doğrulanıyor...' : 'Doğrula ve Giriş Yap'}
+              </Button>
+              {error && (
+                <Alert severity="error" sx={{ mb: 2 }}>
+                  {error}
+                </Alert>
+              )}
+            </form>
+          ) : (
+            <form onSubmit={formik.handleSubmit}>
+              <TextField
+                fullWidth
+                margin="normal"
+                id="telephone"
+                name="telephone"
+                label="Telefon Numarası"
+                value={formik.values.telephone}
+                onChange={formik.handleChange}
+                error={formik.touched.telephone && Boolean(formik.errors.telephone)}
+                helperText={formik.touched.telephone && formik.errors.telephone}
+                InputProps={{
+                  startAdornment: (
+                    <InputAdornment position="start">
+                      <Phone color="primary" />
+                    </InputAdornment>
+                  ),
+                }}
+                sx={{ mb: 2 }}
+              />
 
-            <TextField
-              fullWidth
-              margin="normal"
-              id="password"
-              name="password"
-              label="Şifre"
-              type={showPassword ? 'text' : 'password'}
-              value={formik.values.password}
-              onChange={formik.handleChange}
-              error={formik.touched.password && Boolean(formik.errors.password)}
-              helperText={formik.touched.password && formik.errors.password}
-              InputProps={{
-                startAdornment: (
-                  <InputAdornment position="start">
-                    <Lock color="primary" />
-                  </InputAdornment>
-                ),
-                endAdornment: (
-                  <InputAdornment position="end">
-                    <IconButton
-                      aria-label="toggle password visibility"
-                      onClick={handleClickShowPassword}
-                      edge="end"
+              <TextField
+                fullWidth
+                margin="normal"
+                id="password"
+                name="password"
+                label="Şifre"
+                type={showPassword ? 'text' : 'password'}
+                value={formik.values.password}
+                onChange={formik.handleChange}
+                error={formik.touched.password && Boolean(formik.errors.password)}
+                helperText={formik.touched.password && formik.errors.password}
+                InputProps={{
+                  startAdornment: (
+                    <InputAdornment position="start">
+                      <Lock color="primary" />
+                    </InputAdornment>
+                  ),
+                  endAdornment: (
+                    <InputAdornment position="end">
+                      <IconButton
+                        aria-label="toggle password visibility"
+                        onClick={handleClickShowPassword}
+                        edge="end"
+                      >
+                        {showPassword ? <VisibilityOff /> : <Visibility />}
+                      </IconButton>
+                    </InputAdornment>
+                  ),
+                }}
+                sx={{ mb: 3 }}
+              />
+
+              <Button
+                type="submit"
+                fullWidth
+                variant="contained"
+                size="large"
+                disabled={isSubmitting}
+                sx={{
+                  mb: 3,
+                  height: 48,
+                  background: 'linear-gradient(45deg, #1976d2 30%, #64b5f6 90%)',
+                  boxShadow: '0 3px 5px 2px rgba(33, 150, 243, .3)',
+                  '&:hover': {
+                    background: 'linear-gradient(45deg, #1565c0 30%, #42a5f5 90%)',
+                  }
+                }}
+              >
+                {isSubmitting ? 'Giriş Yapılıyor...' : 'Giriş Yap'}
+              </Button>
+
+              <Grid container spacing={2}>
+                <Grid item xs={12} sm={6}>
+                  <Link to="/register" style={{ textDecoration: 'none' }}>
+                    <Button
+                      fullWidth
+                      variant="outlined"
+                      sx={{
+                        borderColor: '#1976d2',
+                        color: '#1976d2',
+                        '&:hover': {
+                          borderColor: '#1565c0',
+                          backgroundColor: 'rgba(25, 118, 210, 0.04)',
+                        }
+                      }}
                     >
-                      {showPassword ? <VisibilityOff /> : <Visibility />}
-                    </IconButton>
-                  </InputAdornment>
-                ),
-              }}
-              sx={{ mb: 3 }}
-            />
-
-            <Button
-              type="submit"
-              fullWidth
-              variant="contained"
-              size="large"
-              disabled={isSubmitting}
-              sx={{
-                mb: 3,
-                height: 48,
-                background: 'linear-gradient(45deg, #1976d2 30%, #64b5f6 90%)',
-                boxShadow: '0 3px 5px 2px rgba(33, 150, 243, .3)',
-                '&:hover': {
-                  background: 'linear-gradient(45deg, #1565c0 30%, #42a5f5 90%)',
-                }
-              }}
-            >
-              {isSubmitting ? 'Giriş Yapılıyor...' : 'Giriş Yap'}
-            </Button>
-
-            <Grid container spacing={2}>
-              <Grid item xs={12} sm={6}>
-                <Link to="/register" style={{ textDecoration: 'none' }}>
-                  <Button
-                    fullWidth
-                    variant="outlined"
-                    sx={{
-                      borderColor: '#1976d2',
-                      color: '#1976d2',
-                      '&:hover': {
-                        borderColor: '#1565c0',
-                        backgroundColor: 'rgba(25, 118, 210, 0.04)',
-                      }
-                    }}
-                  >
-                    Hesap Oluştur
-                  </Button>
-                </Link>
+                      Hesap Oluştur
+                    </Button>
+                  </Link>
+                </Grid>
+                <Grid item xs={12} sm={6}>
+                  <Link to="/forgot-password" style={{ textDecoration: 'none' }}>
+                    <Button
+                      fullWidth
+                      variant="text"
+                      sx={{
+                        color: '#1976d2',
+                        '&:hover': {
+                          backgroundColor: 'rgba(25, 118, 210, 0.04)',
+                        }
+                      }}
+                    >
+                      Şifremi Unuttum
+                    </Button>
+                  </Link>
+                </Grid>
               </Grid>
-              <Grid item xs={12} sm={6}>
-                <Link to="/forgot-password" style={{ textDecoration: 'none' }}>
-                  <Button
-                    fullWidth
-                    variant="text"
-                    sx={{
-                      color: '#1976d2',
-                      '&:hover': {
-                        backgroundColor: 'rgba(25, 118, 210, 0.04)',
-                      }
-                    }}
-                  >
-                    Şifremi Unuttum
-                  </Button>
-                </Link>
-              </Grid>
-            </Grid>
-          </form>
+            </form>
+          )}
         </Paper>
       </Container>
       <ToastContainer />

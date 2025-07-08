@@ -49,13 +49,30 @@ const ResetPassword = () => {
           throw new Error('Telefon numarası bulunamadı');
         }
 
-        const response = await AuthService.resetPassword(
-          telephone,
-          values.verificationCode,
-          values.newPassword
-        );
+        // 1. Adım: Doğrulama kodunu kontrol et ve resetToken al
+        const verifyResponse = await AuthService.passwordVerifyCode({
+          code: values.verificationCode,
+          phone: telephone
+        });
+        // Gelen mesajı resetToken olarak al
+        let resetToken = verifyResponse.resetToken;
+        if (!resetToken && typeof verifyResponse.message === 'string' && /^[0-9a-fA-F\-]{36}$/.test(verifyResponse.message)) {
+          resetToken = verifyResponse.message;
+        }
+        if (!verifyResponse.success || !resetToken) {
+          throw new Error(verifyResponse.message || 'Doğrulama kodu hatalı veya süresi dolmuş.');
+        }
 
-        if (response.success) {
+        // 2. Adım: Yeni şifreyi belirle
+        const resetResponse = await AuthService.passwordReset({
+          resetToken: resetToken,
+          newPassword: values.newPassword
+        });
+        // Eğer resetResponse bir string ise (ör. UUID), hata olarak gösterme
+        if (typeof resetResponse === 'string' && /^[0-9a-fA-F\-]{36}$/.test(resetResponse)) {
+          throw new Error('Şifre sıfırlama bağlantısı geçersiz veya süresi dolmuş. Lütfen tekrar şifre sıfırlama isteği başlatın.');
+        }
+        if (resetResponse.success) {
           setError('');
           toast.success('Şifreniz başarıyla değiştirildi!', {
             position: "top-right",
@@ -69,10 +86,12 @@ const ResetPassword = () => {
               });
             }
           });
+        } else {
+          throw new Error(resetResponse.message || 'Şifre sıfırlama işlemi başarısız oldu.');
         }
       } catch (err) {
         console.error('Error:', err);
-        const errorMessage = err.response?.data?.message || 'Şifre sıfırlama işlemi başarısız oldu. Lütfen daha sonra tekrar deneyin.';
+        const errorMessage = err.message || 'Şifre sıfırlama işlemi başarısız oldu. Lütfen daha sonra tekrar deneyin.';
         setError(errorMessage);
         toast.error(errorMessage, {
           position: "top-right",

@@ -48,7 +48,36 @@ axiosInstance.interceptors.response.use(
     });
     return response;
   },
-  (error) => {
+  async (error) => {
+    const originalRequest = error.config;
+    // Token expired ise ve daha önce refresh denenmediyse
+    if (error.response && error.response.status === 401 && !originalRequest._retry) {
+      originalRequest._retry = true;
+      const refreshToken = localStorage.getItem('refreshToken');
+      if (refreshToken) {
+        try {
+          const data = await AuthService.refreshToken(refreshToken);
+          if (data.success && data.accessToken && data.refreshToken) {
+            localStorage.setItem('accessToken', data.accessToken.token);
+            localStorage.setItem('refreshToken', data.refreshToken.token);
+            // Yeni token ile isteği tekrar dene
+            originalRequest.headers['Authorization'] = `Bearer ${data.accessToken.token}`;
+            return axiosInstance(originalRequest);
+          } else {
+            // Refresh başarısızsa logout
+            localStorage.removeItem('accessToken');
+            localStorage.removeItem('refreshToken');
+            window.location.href = '/login';
+            return Promise.reject(new Error(data.message || 'Oturum süresi doldu. Lütfen tekrar giriş yapın.'));
+          }
+        } catch (refreshError) {
+          localStorage.removeItem('accessToken');
+          localStorage.removeItem('refreshToken');
+          window.location.href = '/login';
+          return Promise.reject(refreshError);
+        }
+      }
+    }
     // Hata detaylarını logla
     console.error('❌ Axios Hatası:', {
       message: error.message,
@@ -97,6 +126,11 @@ const handleError = (error) => {
     throw new Error('Sunucuya bağlanılamadı. Lütfen internet bağlantınızı ve backend sunucusunun çalıştığını kontrol edin.');
   }
 
+  // Eğer backend 401 döndürdü ve response.data yoksa, özel mesaj ver
+  if (error.response.status === 401 && !error.response.data) {
+    throw new Error('Girilen şifre ile telefon numarası eşleşmiyor');
+  }
+
   // Backend'den gelen hata mesajını kullan
   const errorMessage = error.response?.data?.message 
     || error.response?.data?.error 
@@ -132,11 +166,19 @@ const AuthService = {
         password: '[GİZLİ]'
       });
 
+      // Telefon numarasını +90 ile başlat
+      let telephone = userData.telephone;
+      if (!telephone.startsWith('+90')) {
+        telephone = '+90' + telephone.replace(/^0/, '');
+      }
+
       const formData = {
         firstName: userData.firstName,
         lastName: userData.lastName,
-        telephone: userData.telephone,
-        password: userData.password
+        telephone: telephone,
+        password: userData.password,
+        deviceUuid: userData.deviceUuid,
+        fcmToken: userData.fcmToken
       };
 
       console.log('Backend\'e gönderilecek veriler:', {
@@ -144,7 +186,9 @@ const AuthService = {
         password: '[GİZLİ]'
       });
 
-      const response = await axiosInstance.post('/user/sign-up', formData);
+      const response = await axios.post('http://localhost:8080/v1/api/user/sign-up', formData, {
+        headers: { 'Content-Type': 'application/json' }
+      });
       
       console.log('Backend\'den gelen yanıt:', {
         status: response.status,
@@ -165,41 +209,55 @@ const AuthService = {
   // Giriş yapma işlemi
   login: async (telephone, password) => {
     try {
-      console.log('Giriş isteği gönderiliyor:', { telephone });
-
+      // Telefon numarasını +90 ile başlat
+      if (!telephone.startsWith('+90')) {
+        telephone = '+90' + telephone.replace(/^0/, '');
+      }
       const formData = {
         telephone: telephone,
         password: password
       };
-
-      console.log('Backend\'e gönderilecek giriş verileri:', {
-        ...formData,
-        password: '[GİZLİ]'
+      const response = await axios.post('http://localhost:8080/v1/api/auth/login', formData, {
+        headers: { 'Content-Type': 'application/json' }
       });
-
-      const response = await axiosInstance.post('/user/sign-in', formData);
-      
-      console.log('Giriş yanıtı:', {
-        status: response.status,
-        data: response.data
-      });
-
       const data = response.data;
-
-      if (data && data.token) {
-        localStorage.setItem('token', data.token);
-        console.log('Token başarıyla kaydedildi');
+      // Yeni cihaz algılandıysa özel durum
+      if (data && data.message && data.message.includes('Yeni cihaz algılandı')) {
+        return { success: false, newDevice: true, message: data.message };
+      }
+      if (data && data.accessToken && data.refreshToken) {
+        localStorage.setItem('accessToken', data.accessToken.token);
+        localStorage.setItem('refreshToken', data.refreshToken.token);
         return { success: true, data };
       } else {
-        console.warn('Token alınamadı:', data);
         throw new Error(data?.message || 'Giriş başarısız oldu');
       }
     } catch (error) {
-      console.error('Giriş hatası:', {
-        message: error.message,
-        response: error.response?.data,
-        status: error.response?.status
+      return handleError(error);
+    }
+  },
+
+  // Yeni cihaz için SMS doğrulama
+  phoneVerify: async ({ code, ipAddress, deviceInfo, appVersion, platform }) => {
+    try {
+      const response = await axios.post('http://localhost:8080/v1/api/auth/phone-verify', {
+        code,
+        ipAddress,
+        deviceInfo,
+        appVersion,
+        platform
+      }, {
+        headers: { 'Content-Type': 'application/json' }
       });
+      const data = response.data;
+      if (data && data.accessToken && data.refreshToken) {
+        localStorage.setItem('accessToken', data.accessToken.token);
+        localStorage.setItem('refreshToken', data.refreshToken.token);
+        return { success: true, data };
+      } else {
+        throw new Error(data?.message || 'Doğrulama başarısız oldu');
+      }
+    } catch (error) {
       return handleError(error);
     }
   },
@@ -216,20 +274,12 @@ const AuthService = {
   },
 
   // SMS doğrulama
-  verifyPhone: async (code, telephone) => {
+  verifyPhone: async (code) => {
     try {
-      const response = await axiosInstance.post('/verify/phone', {
-        code,
-        phone: telephone
+      const response = await axios.post('http://localhost:8080/v1/api/user/verify/phone', { code }, {
+        headers: { 'Content-Type': 'application/json' }
       });
-
-      const data = response.data;
-
-      if (data && data.success && data.token) {
-        localStorage.setItem('token', data.token);
-      }
-
-      return data;
+      return response.data;
     } catch (error) {
       return handleError(error);
     }
@@ -258,7 +308,7 @@ const AuthService = {
   // Şifremi unuttum
   forgotPassword: async (telephone) => {
     try {
-      const response = await axiosInstance.post('/user/forgot-password', { telephone });
+      const response = await axios.post(`http://localhost:8080/v1/api/user/password/forgot?phone=${telephone}`);
       return response.data;
     } catch (error) {
       return handleError(error);
@@ -323,6 +373,36 @@ const AuthService = {
   registerMultiple: async (users) => {
     const response = await axios.get(`${API_URL}/kullanici/toplu-kullanici-ekleme`, { params: { users } });
     return response.data;
+  },
+
+  // Şifre sıfırlama kodu doğrulama
+  passwordVerifyCode: async (verificationCodeRequest) => {
+    try {
+      const response = await axios.post('http://localhost:8080/v1/api/user/password/verify-code', verificationCodeRequest);
+      return response.data;
+    } catch (error) {
+      return handleError(error);
+    }
+  },
+
+  // Yeni şifre belirleme
+  passwordReset: async ({ resetToken, newPassword }) => {
+    try {
+      const response = await axios.post('http://localhost:8080/v1/api/user/password/reset', { resetToken, newPassword });
+      return response.data;
+    } catch (error) {
+      return handleError(error);
+    }
+  },
+
+  // Refresh token fonksiyonu
+  refreshToken: async (refreshToken) => {
+    try {
+      const response = await axios.post('http://localhost:8080/v1/api/auth/refresh', { refreshToken });
+      return response.data;
+    } catch (error) {
+      return handleError(error);
+    }
   },
 };
 
