@@ -11,7 +11,7 @@ const News = () => {
   const sampleCampaigns = [
     {
       id: 1,
-      title: "Otobüs & Metro Kombine Bilette %20 İndirim",
+      title: "Otobüs & Metro Kombine Bilette %21 İndirim",
       content: "Aynı gün içinde otobüs ve metro kullanımlarında, ikinci biniş için %20 indirim fırsatını kaçırmayın! BinCard ile tüm hatlar geçerlidir.",
       image: "https://images.unsplash.com/photo-1544620347-c4fd4a3d5957?q=80&w=2069&auto=format&fit=crop",
       validUntil: "2025-08-31",
